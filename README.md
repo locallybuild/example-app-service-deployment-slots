@@ -58,20 +58,20 @@ Both slots pull their image with a **user-assigned managed identity** that holds
 * [Locally Build](https://locally.build).
 * Either [HashiCorp Terraform](https://terraform.io) or [OpenTofu](https://opentofu.org).
 * Either [Docker](https://www.docker.com) or [Podman](https://podman.io) (recommended).
-* The Locally Plugin for `Microsoft.Web` installed (`locally plugin install --name Microsoft.Web`).
 * The Locally Plugin for `Microsoft.ContainerRegistry` installed (`locally plugin install --name Microsoft.ContainerRegistry`).
-* The Locally Plugin for `Microsoft.OperationalInsights` installed (`locally plugin install --name Microsoft.OperationalInsights`).
 * The Locally Plugin for `Microsoft.Insights` installed (`locally plugin install --name Microsoft.Insights`).
+* The Locally Plugin for `Microsoft.OperationalInsights` installed (`locally plugin install --name Microsoft.OperationalInsights`).
+* The Locally Plugin for `Microsoft.Web` installed (`locally plugin install --name Microsoft.Web`).
 
 ## Running the example
 
-First, make sure your container runtime (Docker or Podman) is running, then start Locally:
+First up, we need to ensure our container runtime (Docker or Podman) is running, then launch Locally:
 
 ```bash
 locally build
 ```
 
-With Locally running, open another terminal and initialise Terraform. This downloads the providers and sets up the module:
+With Locally running, in another terminal we can initialise Terraform, which both downloads the providers we need and configures the module for use:
 
 ```bash
 cd environments/locally
@@ -79,21 +79,23 @@ terraform init
 ```
 
 > [!NOTE]
-> You can use OpenTofu instead by running `tofu` wherever this says `terraform`.
+> It's possible to use OpenTofu here by substituting `terraform` for `tofu`.
 
-Once Terraform is initialised, provision the example:
+With Terraform initialised, we can then provision the example by running:
 
 ```bash
 locally run terraform apply
 ```
 
-During the apply, Terraform builds the app twice with `docker build` and pushes both images to the Container Registry, so the `docker` command needs to be available. With Podman, the `podman-docker` shim or a `docker` alias works.
+As part of the apply, the app is built twice with `docker build` (once per release) and both images are pushed into the Container Registry, so the `docker` command needs to be available (with Podman, the `podman-docker` shim or a `docker` alias works).
 
-After you approve the plan and the resources are deployed, both slots are running at the URLs in the outputs:
+Once you approve the plan and the resources have been deployed, both slots are running at the URLs in the outputs:
 
 ```
 production_url = "https://locally-example-slots-app.furnace.locally:5663"
+resource_group = "locally-example-slots-resources"
 staging_url    = "https://locally-example-slots-app-staging.furnace.locally:5663"
+web_app        = "locally-example-slots-app"
 ```
 
 [Open production](https://locally-example-slots-app.furnace.locally:5663) and you'll see v1 in blue. [Open staging](https://locally-example-slots-app-staging.furnace.locally:5663) and you'll see v2 in green. Or from the command line:
@@ -103,7 +105,15 @@ curl -s https://locally-example-slots-app.furnace.locally:5663/api/info
 curl -s https://locally-example-slots-app-staging.furnace.locally:5663/api/info
 ```
 
-### Swapping the slots
+---
+
+As this Terraform configuration sends both slots' logs into a Log Analytics Workspace, we can then query them within [the Locally Dashboard, in the Monitoring section](https://localhost:5678/monitoring/components), by running:
+
+```
+AppServiceConsoleLogs | order by TimeGenerated desc
+```
+
+## Swapping the slots
 
 > [!WARNING]
 > Swapping currently fails on Locally for slots that run a container image, like these - see [Known issue on Locally](#known-issue-on-locally). The steps below are what works on Azure.
@@ -148,14 +158,6 @@ There are three ways to keep the two in step:
 
   It runs the swap when it's created (or when `slot_id` changes), but the web app and slot resources still describe what each slot ran before the swap, so they'll show the same drift on the next plan. It suits a pipeline that swaps once per release and then updates the configuration, rather than a swap you repeat by hand.
 
----
-
-Both slots send their logs to a Log Analytics Workspace. You can query them in [the Monitoring section of the Locally Dashboard](https://localhost:5678/monitoring/components) by running:
-
-```
-AppServiceConsoleLogs | order by TimeGenerated desc
-```
-
 ## Notes
 
 Deployment slots need a Standard (S1) or higher App Service plan, so this example uses S1 rather than the B1 used by the other App Service examples. Slots share the plan's instances with the production app.
@@ -166,9 +168,9 @@ On Azure, a swap first applies the target slot's slot settings to the source slo
 
 This example has no sign-in of its own: anyone who can reach either slot can see its page. A real app would sit behind authentication, and you'd usually restrict who can reach the staging slot too.
 
-## Known issue on Locally
+### Known issue on Locally
 
-Swapping slots that run a container image fails on Locally. `az webapp deployment slot swap` (or `POST .../slots/staging/slotsswap`) returns `500 Internal Server Error` with:
+Swapping slots that run a container image currently fails on Locally. `az webapp deployment slot swap` (or `POST .../slots/staging/slotsswap`) returns `500 Internal Server Error` with:
 
 ```
 the runtime swap failed, so no ARM state was changed: Furnace refused to swap
