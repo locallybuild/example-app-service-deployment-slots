@@ -82,23 +82,34 @@ jobs:
         working-directory: environments/locally
         run: |
           set -euo pipefail
-          call() { curl --silent --show-error --fail --cacert "$LOCALLY_TLS_CA_FILE_PATH" "$@"; }
 
           check() {
-            local url="$1" version="$2" slot="$3" info=""
+            local url="$1" version="$2" slot="$3" info="" err=""
             # The containers can take a little while to come up once deployed.
             for _ in $(seq 60); do
-              info="$(call "$url/api/info" 2>/dev/null)" && break
+              if info="$(curl --silent --show-error --fail --cacert "$LOCALLY_TLS_CA_FILE_PATH" \
+                  "$url/api/info" 2>/tmp/curl.err)"; then
+                err=""
+                break
+              fi
+              err="$(cat /tmp/curl.err)"
               sleep 5
             done
-            echo "$url: $info"
+            echo "$url/api/info: ${info:-<no response>}"
+            if [ -n "$err" ]; then
+              echo "::error::$url/api/info never responded: $err"
+              return 1
+            fi
             jq -e --arg version "$version" --arg slot "$slot" \
               '.release.version == $version and .settings.SLOT_ENVIRONMENT == $slot' <<<"$info" >/dev/null ||
               { echo "::error::expected $url to serve $version in $slot"; return 1; }
           }
 
-          check "$(terraform output -raw production_url)" v1 production
-          check "$(terraform output -raw staging_url)" v2 staging
+          # Check both, so a failure shows whether one slot or both are affected.
+          status=0
+          check "$(terraform output -raw production_url)" v1 production || status=1
+          check "$(terraform output -raw staging_url)" v2 staging || status=1
+          exit "$status"
 
       - name: Show why the deployment failed
         if: failure() && steps.apply0.outcome == 'failure'
@@ -106,6 +117,29 @@ jobs:
           locally logs --json |
             jq -r '.[] | select(.uri | test("/api/deployments/")) | .responseBody // empty | fromjson? | .status_text // empty' |
             sort -u
+
+      # The apps' own output doesn't make it into Locally's CI log, so print the
+      # logs of the containers Locally started when something fails. Locally
+      # may run them under Docker or Podman, so both are listed. Workflow
+      # commands are turned off while the logs print, so nothing in them is
+      # acted on, and these all belong to this job's throwaway Locally instance.
+      - name: Show container logs
+        if: failure()
+        run: |
+          stop="$(uuidgen)"
+          for runtime in docker podman; do
+            command -v "$runtime" >/dev/null || continue
+            echo "::group::$runtime ps -a"
+            "$runtime" ps -a || true
+            echo "::endgroup::"
+            "$runtime" ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^(furnace|locally)-' | while read -r name; do
+              echo "::group::$runtime logs $name"
+              echo "::stop-commands::$stop"
+              "$runtime" logs --tail 300 "$name" 2>&1 || true
+              echo "::$stop::"
+              echo "::endgroup::"
+            done
+          done
 
       - name: Destroy environments/locally
         # Only once there's something to destroy.
