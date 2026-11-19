@@ -47,6 +47,14 @@ jobs:
           docker version --format 'Docker {{.Server.Version}}'
           docker info --format 'Storage driver: {{.Driver}}'
 
+      # The runner has both Docker and Podman, and Locally may pick Podman to
+      # run the apps - but the images are pushed with Docker, and only Docker
+      # is told to trust Locally's CA for the registry, so Podman's pulls fail
+      # with "tls: bad certificate" and the slots never start. Read by
+      # `locally ci` when it starts, so this has to come before setup-locally.
+      - name: Run the apps under Docker
+        run: echo "LOCALLY_CONTAINER_RUNTIME=docker" >> "$GITHUB_ENV"
+
       - uses: locallybuild/setup-locally@dc4fb46b46af5deded2a7e8ce1b6da7c337240f0 # v1.2.0
         with:
           team-uuid: ${{ vars.LOCALLY_TEAM_UUID }}
@@ -117,6 +125,15 @@ jobs:
           locally logs --json |
             jq -r '.[] | select(.uri | test("/api/deployments/")) | .responseBody // empty | fromjson? | .status_text // empty' |
             sort -u
+
+      # Any failed requests Locally saw for the web app and its slot, such as
+      # an image pull it couldn't make.
+      - name: Show failed App Service requests
+        if: failure()
+        run: |
+          locally logs --json |
+            jq -r '.[] | select((.statusCode // .status // .responseStatus // 0 | tonumber? // 0) >= 400 and (.uri | test("Microsoft.Web|/v2/"; "i")))
+              | "\(.statusCode // .status // .responseStatus) \(.method // "") \(.uri)\n\(.responseBody // "" | tostring | .[0:500])"' || true
 
       # The apps' own output doesn't make it into Locally's CI log, so print the
       # logs of the containers Locally started when something fails. Locally
